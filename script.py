@@ -17,8 +17,11 @@ warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Evaluación - Matriz de Funciones → BALANCE", layout="wide")
 
 # ---------------- CONFIG ----------------
-ROOT_FOLDER = r"C:\Users\jmedina\TFE GROUP\Cristina Román Ramírez - FUNCIONES 2025"
-BALANCE_PATH = r"C:\Users\jmedina\TFE GROUP\Adolfo Monar Freire - BALANCES DE CARGA DE TRABAJO - TSER_2025\BALANCE DE CARGAS DE TRABAJO_JONATHAN MEDINA.xlsx"
+# Obtiene la ruta base del proyecto, funcione donde funcione
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+ROOT_FOLDER = os.path.join(BASE_DIR, "data", "matrices_funciones")  # Ahora apunta a ./data
+BALANCE_PATH = os.path.join(BASE_DIR, "data", "BALANCE DE CARGAS DE TRABAJO_JONATHAN MEDINA.xlsx")
 BALANCE_SHEET_MUESTREO = "MUESTREO"
 LISTA_MAESTRA_SHEET = "Lista Maestra"
 
