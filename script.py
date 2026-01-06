@@ -12,6 +12,8 @@ from plotly.subplots import make_subplots
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+import io
+import pytz
 
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Evaluación - Matriz de Funciones → BALANCE", layout="wide")
@@ -600,6 +602,53 @@ def scan_excels(root):
                 files.append(os.path.join(dirpath, f))
     files.sort()
     return files
+
+
+# --- AGREGAR ESTA NUEVA FUNCIÓN AQUÍ ---
+@st.cache_data
+def cargar_excel_base():
+    """Carga el archivo Excel base para añadir nuevos registros."""
+    try:
+        # NOTA: Añade dtype para evitar el ArrowTypeError local
+        df = pd.read_excel(
+            BALANCE_PATH,
+            sheet_name=BALANCE_SHEET_MUESTREO,
+            dtype={'TIEMPO INICIO': str, 'TIEMPO FIN': str}  # 🔧 Solución al error local
+        )
+        return df
+    except Exception as e:
+        st.error(f"Error cargando el Excel base: {e}")
+        return pd.DataFrame()  # Retorna un DataFrame vacío en caso de error
+
+# Cargar el DataFrame base UNA VEZ al inicio (fuera de cualquier función)
+df_base = cargar_excel_base()
+# ---------------------------------------------------------
+
+def guardar_y_descargar_registro(vals, df_existente):
+    """
+    vals: diccionario con los datos del nuevo registro (EMPRESA, ACTIVIDAD, etc.)
+    df_existente: DataFrame de pandas cargado desde el Excel original
+    """
+    # 1. Convertir el nuevo registro en un DataFrame
+    nuevo_df = pd.DataFrame([vals])
+
+    # 2. Concatenarlo con los datos existentes
+    df_actualizado = pd.concat([df_existente, nuevo_df], ignore_index=True)
+
+    # 3. Crear un archivo Excel EN MEMORIA
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_actualizado.to_excel(writer, index=False, sheet_name='MUESTREO')
+    output.seek(0)  # Ir al inicio del archivo en memoria
+
+    # 4. Ofrecer el botón de descarga en Streamlit
+    st.download_button(
+        label="📥 DESCARGAR EXCEL ACTUALIZADO",
+        data=output,
+        file_name=f"BALANCE_ACTUALIZADO_{datetime.now().date()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    return True
 
 
 def find_header_row_in_sheet(df):
@@ -1460,21 +1509,31 @@ with tab1:
         if not actividad_sel:
             st.error("Selecciona una actividad antes de guardar.")
         else:
+            # --- CORRECCIÓN DE ZONA HORARIA PARA TODA LA OPERACIÓN ---
+            from datetime import datetime
+            import pytz
+
+            utc_ahora = datetime.now(pytz.UTC)
+            zona_local = pytz.timezone('America/Guayaquil')
+            hora_local = utc_ahora.astimezone(zona_local)
+            # --------------------------------------------------------
+
+            # Establecer tiempos con hora LOCAL corregida
             if not st.session_state.get("tiempo_fin"):
-                st.session_state["tiempo_fin"] = datetime.now()
-                st.success(f"TIEMPO FIN establecido: {st.session_state['tiempo_fin'].strftime('%Y-%m-%d %H:%M:%S')}")
+                st.session_state["tiempo_fin"] = hora_local
+                st.success(f"TIEMPO FIN establecido: {hora_local.strftime('%Y-%m-%d %H:%M:%S')}")
 
             if not st.session_state.get("tiempo_inicio"):
-                st.session_state["tiempo_inicio"] = datetime.now()
-                st.success(
-                    f"TIEMPO INICIO establecido: {st.session_state['tiempo_inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
+                st.session_state["tiempo_inicio"] = hora_local
+                st.success(f"TIEMPO INICIO establecido: {hora_local.strftime('%Y-%m-%d %H:%M:%S')}")
 
+            # Crear diccionario vals con hora LOCAL
             vals = {
                 "EMPRESA": empresa_input,
                 "DEPARTAMENTO": departamento,
                 "CARGO": cargo,
                 "EVALUADO": evaluado_input,
-                "FECHA": datetime.now(),
+                "FECHA": hora_local.strftime("%d/%m/%Y"),
                 "ACTIVIDAD": actividad_sel,
                 "TIEMPO INICIO": st.session_state.get("tiempo_inicio").strftime("%H:%M:%S") if st.session_state.get(
                     "tiempo_inicio") else "",
@@ -1483,49 +1542,52 @@ with tab1:
                 "TIPO DE ANALISIS": tipo_analisis_val
             }
 
-            ok, meta = save_record_to_muestreo(vals, actividad_sel,
-                                               st.session_state.get("tiempo_inicio"),
-                                               st.session_state.get("tiempo_fin"))
-
-            if ok:
-                status, rownum = meta
-                st.success(f"Registro {status} en fila {rownum}.")
-                st.session_state["last_insert_row"] = rownum
+            # ✅ LLAMADA A LA NUEVA FUNCIÓN (reemplaza save_record_to_muestreo)
+            if not df_base.empty:
+                st.success(
+                    "✅ Registro preparado correctamente. Usa el botón de abajo para descargar el Excel actualizado.")
+                guardar_y_descargar_registro(vals, df_base)
+                # Opcional: Reiniciar estado para nuevo registro
                 st.session_state["last_insert_activity"] = actividad_sel
                 st.session_state["last_insert_tiempo_inicio"] = st.session_state.get("tiempo_inicio")
-                st.rerun()
             else:
-                st.error(f"No se pudo guardar: {meta}")
+                st.error(
+                    "❌ No se pudo cargar el archivo base. Verifica que 'BALANCE DE CARGAS...xlsx' esté en la carpeta /data.")
 
+    # Actualizar el bloque auto_save_on_finish (justo después del botón manual)
     if 'auto_save_on_finish' not in st.session_state:
         st.session_state['auto_save_on_finish'] = False
-    if auto_save_on_finish:
-        if actividad_sel:
-            if not st.session_state.get("tiempo_inicio"):
-                st.session_state["tiempo_inicio"] = datetime.now()
-            if not st.session_state.get("tiempo_fin"):
-                st.session_state["tiempo_fin"] = datetime.now()
-            vals = {
-                "EMPRESA": empresa_input,
-                "DEPARTAMENTO": departamento,
-                "CARGO": cargo,
-                "EVALUADO": evaluado_input,
-                "FECHA": datetime.now(),
-                "ACTIVIDAD": actividad_sel,
-                "TIEMPO INICIO": st.session_state.get("tiempo_inicio").strftime("%H:%M:%S"),
-                "TIEMPO FIN": st.session_state.get("tiempo_fin").strftime("%H:%M:%S"),
-                "TIPO DE ANALISIS": tipo_analisis_val
-            }
-            ok, meta = save_record_to_muestreo(vals, actividad_sel, st.session_state.get("tiempo_inicio"),
-                                               st.session_state.get("tiempo_fin"))
-            if ok:
-                status, rownum = meta
-                st.success(f"Registro {status} en fila {rownum} (auto-guardado al finalizar).")
-                st.session_state["last_insert_row"] = rownum
-                st.session_state["last_insert_activity"] = actividad_sel
-                st.session_state["last_insert_tiempo_inicio"] = st.session_state.get("tiempo_inicio")
-            else:
-                st.error(f"No se pudo auto-guardar: {meta}")
+
+    if auto_save_on_finish and actividad_sel:
+        # Usar la misma lógica de zona horaria
+        utc_ahora = datetime.now(pytz.UTC)
+        zona_local = pytz.timezone('America/Guayaquil')
+        hora_local = utc_ahora.astimezone(zona_local)
+
+        if not st.session_state.get("tiempo_inicio"):
+            st.session_state["tiempo_inicio"] = hora_local
+        if not st.session_state.get("tiempo_fin"):
+            st.session_state["tiempo_fin"] = hora_local
+
+        vals = {
+            "EMPRESA": empresa_input,
+            "DEPARTAMENTO": departamento,
+            "CARGO": cargo,
+            "EVALUADO": evaluado_input,
+            "FECHA": hora_local.strftime("%d/%m/%Y"),
+            "ACTIVIDAD": actividad_sel,
+            "TIEMPO INICIO": st.session_state.get("tiempo_inicio").strftime("%H:%M:%S"),
+            "TIEMPO FIN": st.session_state.get("tiempo_fin").strftime("%H:%M:%S"),
+            "TIPO DE ANALISIS": tipo_analisis_val
+        }
+
+        if not df_base.empty:
+            st.success("✅ Registro auto-guardado. Descarga el Excel actualizado:")
+            guardar_y_descargar_registro(vals, df_base)
+            st.session_state["last_insert_activity"] = actividad_sel
+            st.session_state["last_insert_tiempo_inicio"] = st.session_state.get("tiempo_inicio")
+        else:
+            st.error("❌ No se pudo cargar el archivo base para auto-guardado.")
 
     st.markdown("---")
 
